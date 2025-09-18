@@ -4,12 +4,19 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from config import system_prompt
+from functions.get_files_info import schema_get_files_info
 
 def main():
     load_dotenv()
     api_key = os.environ.get("GEMINI_API_KEY")
     client = genai.Client(api_key=api_key)
     gen_model = "gemini-2.0-flash-001"
+
+    available_functions = types.Tool(
+        function_declarations = [
+            schema_get_files_info,
+        ]
+    )
 
     # Check for --verbose flag
     verbose = "--verbose" in sys.argv
@@ -32,9 +39,13 @@ def main():
     ]
 
     response = client.models.generate_content(
-        model=gen_model, 
-        contents=messages,
-        config=types.GenerateContentConfig(system_instruction=system_prompt))
+        model = gen_model, 
+        contents = messages,
+        config=types.GenerateContentConfig(
+            tools = [available_functions],
+            system_instruction = system_prompt
+        )
+    )
 
     # Extra info if --verbose flag used
     if verbose:
@@ -43,8 +54,18 @@ def main():
         print("Response tokens:", response.usage_metadata.candidates_token_count)
     
     # Print LLM response
-    print("Response:")
-    print(response.text)
+    if response.function_calls:
+        for call in response.function_calls:
+            # Normalization of output, since directory is optional, to always print "."
+            args = dict(call.args)
+            if args.get("directory") in (None, ""):
+                args["directory"] = "."
+            print(f"Calling function: {call.name}({call.args})")
+    else:
+        print("Response:")
+        print(response.text)
+    # print(f"function_call_part: {function_call_part}")
+    # print(f"Calling function: {response.function_call_part.name}({response.function_call_part.args})")
 
 
 if __name__ == "__main__":
