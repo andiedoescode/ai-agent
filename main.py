@@ -5,6 +5,7 @@ from google import genai
 from google.genai import types
 from config import system_prompt
 from func_calls import available_functions
+from call_function import call_function
 
 
 def main():
@@ -33,6 +34,7 @@ def main():
         types.Content(role="user", parts=[types.Part(text=user_prompt)])
     ]
 
+    # Generating content
     response = client.models.generate_content(
         model = gen_model, 
         contents = messages,
@@ -51,18 +53,27 @@ def main():
     # Print LLM response
     if response.function_calls:
         for call in response.function_calls:
-            # Normalization of output, since directory is optional, to always print "." if none is specified
-            args = dict(call.args)
-            if args.get("directory") in (None, ""):
-                args["directory"] = "."
-            print(f"Calling function: {call.name}({call.args})")
+            function_call_result = call_function(call, verbose=verbose)
+
+            # Checking if the structure exists
+            if not function_call_result.parts:
+                print("ERROR: No response found.")
+                sys.exit(1)
+            
+            part = function_call_result.parts[0]
+
+            # Checking for existence of part.function_response, otherwise returns None. Avoids AttributeError.
+            fr = getattr(part, "function_response", None)
+            if fr is None or fr.response is None:
+                print("ERROR: No response found.")
+                sys.exit(1)
+
+            if verbose:
+                print(f"-> {fr.response}")
 
     else:
         print("Response:")
         print(response.text)
-    # print(f"function_call_part: {function_call_part}")
-    # print(f"Calling function: {response.function_call_part.name}({response.function_call_part.args})")
-
 
 if __name__ == "__main__":
     main()
