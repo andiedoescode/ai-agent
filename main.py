@@ -3,13 +3,14 @@ import sys
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from config import system_prompt, gen_model
+from config import system_prompt, ITER_MAX
 from func_calls import available_functions, available_tools, call_function
 
 def main():
     load_dotenv()
     api_key = os.environ.get("GEMINI_API_KEY")
     client = genai.Client(api_key=api_key)
+    gen_model = "gemini-2.0-flash-001"
     
     # Check for --verbose flag
     verbose = "--verbose" in sys.argv
@@ -31,10 +32,27 @@ def main():
         types.Content(role="user", parts=[types.Part(text=user_prompt)])
     ]
 
-    generate_content(client, messages, verbose)
+    # Agent loop - repeatedly ask the model for the next step until it returns a final text or hit ITER_MAX.
+    iter_count = 0
+    while True:
+        iter_count += 1
+        if iter_count > ITER_MAX:
+            print(f"Max iterations ({ITER_MAX}) reached.")
+            sys.exit(1)
+        
+        # Get the model's next turn w/ optional tool calls. If it returns final text, print and exit.
+        try:
+            final_response = generate_content(client, gen_model, messages, verbose)
+            if final_response:
+                print("Final response:")
+                print(final_response)
+                break
+        except Exception as e:
+            print(f"Error in generate_content: {e}")
 
 # Generating content
-def generate_content(client, messages, verbose):
+def generate_content(client, gen_model, messages, verbose):
+    # Call model with entire conversation history (messages) and the tool schemas.
     response = client.models.generate_content(
         model = gen_model, 
         contents = messages,
@@ -44,25 +62,27 @@ def generate_content(client, messages, verbose):
         )
     )
 
-    # Extra info if --verbose flag used
+    # Extra token info for this turn if --verbose flag used.
     if verbose:
         print("Prompt tokens:", response.usage_metadata.prompt_token_count)
         print("Response tokens:", response.usage_metadata.candidates_token_count)
 
-
+    # Checking over list of response variations (candidates). Add model's message & tool call intents (.content) to conversation history.
     candidates = response.candidates
     for candidate in candidates:
         function_call_content = candidate.content
         messages.append(function_call_content) 
 
+    # If no more tool/function calls this turn, return final response (str).
     if not response.function_calls:
-        print("Response:")
-        print(response.text)
+        return response.text
     
     function_responses = []
 
+    # Execute each tool call and capture output.
     for call in response.function_calls:
-        function_call_result = call_function(call, verbose=verbose)
+        # Make a call to the identified tool/function. Returns a function_response part.
+        function_call_result = call_function(call, verbose)
 
         part = function_call_result.parts[0]
         # Checking for existence of function_response in parts, otherwise returns None. Avoids AttributeError.
@@ -70,60 +90,20 @@ def generate_content(client, messages, verbose):
 
         # Checking if the structure exists
         if not function_call_result.parts or fr is None:
-            raise Exception(":( Empty function call result.")
-            sys.exit(1)
+            raise Exception("Error - :( Empty function call result.")
 
         if verbose:
             print(f"-> {fr.response}")
 
+        # Collecting tool function responses.
         function_responses.append(part)
 
-
-    # candidates = response.candidates
-    # made_tool_call = False
-
-    # # For dispatch
-    # for cand in candidates:
-    #     messages.append(cand.content)
-
-    #     for part in cand.content.parts:
-    #         # Check for existence of function_call, otherwise returns None. Avoids AttributeError.
-    #         fc = getattr(part, "function_call", None)
-
-    #         # If function_call exists, 
-    #         if fc:
-    #             made_tool_call = True
-
-    #             func_name = fc.name
-    #             func_args = dict(fc.args or {})
-    #             func_args.setdefault("working_directory", "calculator")
-    #             py_func = available_tools.get(func_name)
-            
-    #             if not py_func:
-    #                 continue
-
-    #             print(f"- Calling function: {func_name}")
-
-    #             result = py_func(**func_args)
-
-    #             fr_part = types.Part(
-    #                 function_response = types.FunctionResponse(
-    #                     name = func_name,
-    #                     id = fc.id,
-    #                     response = {"result": result},
-    #                 )
-    #             )
-    #             new_msg = types.Content(role="user", parts=[fr_part])
-    #             messages.append(new_msg)
-
-    # if not made_tool_call and response.text:
-    #     print("Final response:")
-    #     print(response.text)
-    #     break
-    # else:
-    #     continue
-
-    # raise Exception("some sorta error :/")
+    if not function_responses:
+        raise Exception("Error - No function responses were generated.")
+    
+    # Append tool responses as a single user message to conversation history so model can read results next turn.
+    new_msg = types.Content(role = "user", parts = function_responses)
+    messages.append(new_msg)
 
 if __name__ == "__main__":
     main()
