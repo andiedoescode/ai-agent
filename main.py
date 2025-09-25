@@ -4,16 +4,14 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from config import system_prompt
-from func_calls import available_functions
-from call_function import call_function
-
+from func_calls import available_functions, available_tools, call_function
 
 def main():
     load_dotenv()
     api_key = os.environ.get("GEMINI_API_KEY")
     client = genai.Client(api_key=api_key)
     gen_model = "gemini-2.0-flash-001"
-
+    
     # Check for --verbose flag
     verbose = "--verbose" in sys.argv
     user_args = []
@@ -43,6 +41,30 @@ def main():
             system_instruction = system_prompt
         )
     )
+
+    candidates = response.candidates
+    for cand in candidates:
+        messages.append(cand.content)
+
+        for part in cand.content.parts:
+            fc = getattr(part, "function_call", None)
+
+            if fc:
+                func_name = fc.name
+                func_args = fc.args
+                func_args.setdefault("working_directory", ".")
+                py_func = available_tools.get(func_name)
+                result = py_func(**func_args)
+
+                fr_part = types.Part(
+                    function_response = types.FunctionResponse(
+                        name = func_name,
+                        id = fc.id,
+                        response = {"result": result},
+                    )
+                )
+                new_msg = types.Content(role="user", parts=[fr_part])
+                messages.append(new_msg)
 
     # Extra info if --verbose flag used
     if verbose:
