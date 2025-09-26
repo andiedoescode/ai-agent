@@ -1,8 +1,10 @@
 import os
 import sys
+import time
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from google.api_core.exceptions import ResourceExhausted
 from config import system_prompt, ITER_MAX
 from func_calls import available_functions, available_tools, call_function
 
@@ -47,8 +49,16 @@ def main():
                 print("Final response:")
                 print(final_response)
                 break
+
         except Exception as e:
-            print(f"Error in generate_content: {e}")
+            error_str = str(e)
+
+            if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                print(f"Rate limited - exhausted your API token quota. Retry again later.")
+                break
+            else:
+                print(f"Error in generate_content: {e}")
+                break
 
 # Generating content
 def generate_content(client, gen_model, messages, verbose):
